@@ -11,4 +11,9 @@ Welcome to the YouTube MCP Server knowledge base.
 
 ## Quick Links
 - [[log|Activity Log]]
-- [[resources/youtube-api-notes|YouTube Data API v3 Architecture Notes]]
+- [[resources/mcp-protocol-architecture|MCP Protocol Architecture]]
+- [[resources/youtube-api-quotas|YouTube Data API v3 Quota Economics]]
+- [[resources/sqlite-fixture-caching|SQLite Fixture and Cache Design]]
+- [[resources/prompt-injection-defense|Prompt Injection Defense]]
+- [[resources/playlist-constraint-algorithm|Playlist Constraint Algorithm]]
+- [[resources/adr-governance-workflow|ADR Governance Workflow]]

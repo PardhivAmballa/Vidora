@@ -8,7 +8,7 @@ status: research
 
 ## Purpose
 
-CI should provide repeatable evidence that each PR builds, passes linting, contains no accidental secrets, validates agent skills and brain notes, and passes offline tests. The supplied repository has `.github/workflows/ci.yml` with checkout, Python setup, pip caching, dependency installation, placeholder security output, and pytest. Evolve it into enforceable checks.
+CI should provide repeatable evidence that each PR builds, passes linting, contains no accidental secrets, validates agent skills and brain notes, and passes offline tests. This repository already has a baseline GitHub Actions workflow, but it should be treated as a starting point rather than a guarantee. The final CI pipeline should enforce the project’s governance rules, not merely print placeholder output.
 
 The SDLC brief requires build, lint, tests, secret scanning, `SKILL.md` frontmatter/naming validation, and brain-note schema/broken-link validation on PRs. AI-generated changes still require human review. See [[para-knowledge-management]] and [[adr-governance-workflow]].
 

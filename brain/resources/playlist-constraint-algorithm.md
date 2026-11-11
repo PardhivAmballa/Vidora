@@ -8,9 +8,9 @@ status: research
 
 ## Requirement interpretation
 
-FR-5 accepts a natural-language request containing topic, target total duration, maximum per-video duration, and language. The system generates a compliant candidate playlist, presents it, and creates it in the user's account only after explicit confirmation.
+FR-5 is the core user-value feature in the project statement: a natural-language request may specify a topic, total duration, maximum video length, and language, and the system must build a playlist that fits those constraints, present it for explicit user confirmation, and only then create it in the user's YouTube account.
 
-Separate intent parsing from candidate selection. An AI model may parse the request, but its output must become a typed, validated object. The selection algorithm is deterministic and must not treat metadata as policy. See [[prompt-injection-defense]], [[cosine-similarity-tfidf]], and [[youtube-api-quotas]].
+The requirement is intentionally strict: the system must separate intent parsing from candidate selection. A model may interpret the request, but its output must be converted into a typed and validated constraint object before the planner reads it. The ranking algorithm must be deterministic and must never let metadata override policy or human confirmation. See [[prompt-injection-defense]], [[cosine-similarity-tfidf]], and [[youtube-api-quotas]].
 
 ## Constraint schema
 
@@ -27,23 +27,32 @@ class PlaylistConstraints:
     candidate_limit: int = 100
 ```
 
-Validate positive durations, upper bounds, non-empty topic, allowed language codes, and candidate limits. Convert phrases such as “two hours” into seconds. Ask a clarifying question if “two-hour playlist” could mean exactly two hours or at most two hours.
+Validation must include:
+
+- positive target duration;
+- positive maximum per-video duration;
+- non-empty topic text;
+- allowed language codes or `None`;
+- bounded candidate count;
+- explicit handling of ambiguous phrases such as “two hours” when they could mean “exactly two hours” or “at most two hours.”
+
+Convert phrases such as “two hours” into seconds before evaluation. Parse ISO 8601 durations such as `PT1H2M3S` into integer seconds, and never compare duration strings lexicographically.
 
 ## Candidate preparation
 
-1. Search the official API for candidate videos.
-2. Deduplicate by canonical video ID.
-3. Hydrate duration and metadata in batches.
-4. Exclude inaccessible videos and unknown durations where hard guarantees are needed.
-5. Exclude videos longer than the maximum.
-6. Rank using [[cosine-similarity-tfidf]] and documented secondary signals.
-7. Preserve provenance for why each candidate passed or failed.
+1. search the official API for candidate videos;
+2. deduplicate by canonical video ID;
+3. hydrate duration and metadata in batches;
+4. reject inaccessible videos and unknown durations where a hard guarantee is required;
+5. exclude videos longer than the maximum allowed duration;
+6. rank using [[cosine-similarity-tfidf]] and documented secondary signals;
+7. preserve provenance for why each candidate passed or failed.
 
-Parse ISO 8601 durations such as `PT1H2M3S` into integer seconds. Never compare duration strings lexicographically.
+The planner should never trust unresolved metadata without validation. If there are too few valid candidates, the planner should say so and suggest broadening the topic or relaxing the max length, rather than pretending the entire constraint set is satisfied.
 
 ## Greedy baseline
 
-A greedy algorithm is simple and explainable, but not globally optimal. One heuristic is to prioritise relevance, use relevance-per-second as a tie-breaker, and cap channel concentration:
+A greedy baseline is simple, explainable, and easy to test. It prioritises relevance, uses relevance-per-second as a tie-breaker, and caps channel concentration to avoid a playlist dominated by a single channel.
 
 ```python
 def curate(candidates, constraints):
@@ -80,35 +89,64 @@ def curate(candidates, constraints):
     }
 ```
 
-This is an illustrative heuristic; state the objective explicitly. The greedy ranking prioritises relevance, so it may leave a duration gap that a subset-sum algorithm could fill better. Stable tie-breaking makes tests repeatable.
+This is illustrative, not the only acceptable design. The important point is that the planner states its objective explicitly and makes its selection criteria inspectable. Stable tie-breaking keeps tests deterministic.
 
 ## Alternative optimisation
 
-For small candidate sets, a 0/1 knapsack or subset-sum dynamic program can optimise duration fit while rewarding relevance:
+For smaller candidate sets, a 0/1 knapsack or subset-sum dynamic program can optimise duration fit while maintaining relevance. The formal objective can be framed as:
 
 \[
-\max \sum_i x_i(w_r r_i-w_c c_i)
+\max \sum_i x_i(w_r r_i - w_c c_i)
 \]
 
 subject to:
 
 \[
-\sum_i x_i d_i \le T+\epsilon,\quad x_i\in\{0,1\}
+\sum_i x_i d_i \le T + \epsilon, \quad x_i \in \{0, 1\}
 \]
 
-Here \(r_i\) is relevance, \(d_i\) duration, \(c_i\) channel concentration penalty, \(T\) target seconds, and \(\epsilon\) permitted overshoot. Bound candidate count and time horizon to keep runtime predictable.
+Here \(r_i\) is relevance, \(d_i\) is duration, \(c_i\) is a concentration penalty, \(T\) is target seconds, and \(\epsilon\) is the permitted overshoot. Bound candidate count and time horizon to keep runtime predictable.
 
-## Define target semantics
+## Semantics of “target duration”
 
-A duration target can mean “do not exceed,” “reach at least,” or “land within a tolerance window.” These are different constraints. Parse or clarify intent. If too few relevant candidates remain after filtering, report the shortfall and offer to broaden the topic, relax the max length, or increase tolerance. Never claim success when a hard constraint is violated.
+The term “target duration” can mean different things:
+
+- not to exceed the limit;
+- reach at least the target;
+- land within a tolerance window.
+
+These are different constraints and should be disambiguated before the planner commits. When a planner cannot satisfy the hard constraints, it must fail explicitly and offer a retry with a broader topic, more relaxed max duration, or larger tolerance. It must never claim success when a hard constraint is violated.
 
 ## Confirmation and commit
 
-Display playlist title/topic, item titles/channels/durations/scores, total duration, target/tolerance, language, and caveats. The algorithm creates a proposal, not a side effect. After explicit confirmation, revalidate the exact proposal, OAuth state, channel availability, and quota budget. Budget playlist creation and each item insertion; see [[youtube-api-quotas]].
+Before a write occurs, the system should display:
+
+- playlist title/topic;
+- each item's title, channel, duration, and score;
+- total duration and target comparison;
+- language and any caveats;
+- the exact proposal ID and a content hash for the proposal.
+
+The algorithm creates a proposal, not a write. After explicit confirmation, the system must revalidate the exact proposal, OAuth state, channel availability, and quota budget before creating the playlist. This prevents a malformed or stale plan from being committed. See [[youtube-api-quotas]].
 
 ## Tests
 
-Test ambiguous and invalid requests, ISO duration parsing, empty candidates, all-too-long candidates, duplicate IDs, exact target, tolerance boundaries, over-target candidates, missing durations, channel caps, stable ties, quota rejection, and confirmation bypass. Add an end-to-end MCP test for FR-5.
+The planner needs tests for:
+
+- ambiguous or invalid requests;
+- ISO duration parsing;
+- empty or nearly empty candidates;
+- all candidates exceeding max length;
+- duplicate IDs;
+- exact target and tolerance boundaries;
+- over-target selections;
+- missing durations;
+- channel caps;
+- stable ties;
+- quota rejection before execution;
+- confirmation bypass attempts.
+
+An end-to-end MCP test should verify FR-5 as a user-facing workflow rather than only a value function.
 
 ## Related notes
 

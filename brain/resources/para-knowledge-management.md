@@ -8,7 +8,7 @@ status: research
 
 ## Why PARA fits
 
-PARA organises knowledge by its relationship to action. It distinguishes active deliverables from ongoing responsibilities, reusable reference material, and inactive historical context. In this project the second brain is engineering evidence: requirements, decisions, skills, test results, and review notes should link to one another.
+PARA organises knowledge by its relationship to action. It distinguishes active deliverables from ongoing responsibilities, reusable reference material, and inactive historical context. In this project, the second brain is engineering evidence: requirements, decisions, skills, test results, and review notes should link to one another and remain easy to retrieve.
 
 The SDLC brief specifies this structure and the `brain-ingest`, `brain-refine`, and `brain-query` workflows. It requires every ADR and skill to cite a distilled note, brain changes to pass through PRs, and contributions to be visible in commit history. See [[adr-governance-workflow]] and [[github-actions-ci-setup]].
 

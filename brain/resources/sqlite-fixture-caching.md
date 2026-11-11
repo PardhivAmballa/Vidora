@@ -8,16 +8,18 @@ status: research
 
 ## Goals
 
-The system needs two separate mechanisms:
+The project requires two separate mechanisms:
 
-1. **Runtime cache:** reduces repeat calls to the official API and conserves quota.
-2. **Test fixtures:** deterministic snapshots used by tests so CI consumes zero YouTube quota.
+1. a runtime cache that reduces repeat calls to the official API and conserves quota;
+2. deterministic JSON fixtures used by tests so CI consumes zero YouTube quota.
 
-Runtime entries expire and need invalidation. Fixtures are versioned test data and should not change just because the live API changes. See [[youtube-api-quotas]] and [[mcp-protocol-architecture]].
+The runtime cache is for operational efficiency; the fixtures are for correctness and repeatability. They are not interchangeable. Runtime entries expire and require invalidation; fixtures are versioned, deterministic snapshots and should not change just because the live API changes.
+
+See [[youtube-api-quotas]], [[mcp-protocol-architecture]], and [[github-actions-ci-setup]].
 
 ## Cache keys
 
-A key must include all parameters that can affect a response. A search key may include endpoint, normalised query, language, region, ordering, page token, and result count. Hash canonical JSON instead of concatenating ambiguous strings.
+A key must include all parameters that can affect a response. A search key may include endpoint, normalised query, language, region, ordering, page token, and result count. Hash canonical JSON rather than concatenating ambiguous strings.
 
 ```python
 import hashlib, json
@@ -30,7 +32,7 @@ def make_cache_key(endpoint: str, params: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 ```
 
-Never include secrets in keys. For user-specific data, partition by a stable non-secret account identifier and enforce access control to prevent cross-account leakage.
+Never include secrets in cache keys. For user-specific data, partition by a stable non-secret account identifier and enforce access control to prevent cross-account leakage.
 
 ## SQLite schema
 
@@ -45,7 +47,7 @@ CREATE TABLE IF NOT EXISTS api_cache (
 CREATE INDEX IF NOT EXISTS idx_api_cache_expiry ON api_cache(expires_at);
 ```
 
-Use a separate table for quota accounting. SQLite transactions should make ledger reservations atomic. WAL mode can improve local reader/writer concurrency, but transactions should remain short and lock contention should be handled explicitly.
+Use a separate table for quota accounting. SQLite transactions should make ledger reservations atomic. WAL mode can improve concurrency, but transactions must remain short and lock contention should be handled explicitly.
 
 ## Cache implementation sketch
 
@@ -107,13 +109,15 @@ tests/
   integration/
 ```
 
-Fixtures should be synthetic or sanitised. Do not copy real likes, subscriptions, OAuth responses, or private playlist data into the repository.
+Fixtures should be synthetic or sanitised. Do not copy real likes, subscriptions, OAuth responses, private playlist data, or personal metadata into the repository. The project statement explicitly calls for personal data to be kept out of fixtures and logs.
 
 ## TTL and invalidation
 
-Use endpoint-specific TTLs. Search results may need a shorter TTL than channel descriptions; live status and counts can change quickly. After writes, invalidate affected cache entries. Expose retrieval timestamps when freshness matters and avoid promising real-time data from cached responses.
+Use endpoint-specific TTLs. Search results may require a shorter TTL than channel descriptions; live status and counts can change quickly. After writes, invalidate affected cache entries. Expose retrieval timestamps when freshness matters and avoid promising real-time data from cached responses.
 
 ## Tests
+
+This design should be covered by tests that validate:
 
 - cache hit avoids provider call;
 - miss calls provider and stores result;
@@ -122,7 +126,7 @@ Use endpoint-specific TTLs. Search results may need a shorter TTL than channel d
 - JSON round-trip preserves DTO fields;
 - malformed fixture gives a clear error;
 - fixture mode never uses the network;
-- budget rejection happens before provider invocation;
+- quota rejection happens before provider invocation;
 - concurrent quota reservations cannot overspend.
 
 ## Related notes

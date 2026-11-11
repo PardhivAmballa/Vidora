@@ -6,21 +6,21 @@ status: research
 
 # Google OAuth 2.0 Token Lifecycle
 
-## Context and key constraint
+## Context and design constraint
 
-The server needs authorised access for user-specific operations such as reading liked videos, subscriptions, playlists, and creating playlists. Use Google OAuth 2.0 and request the minimum scopes required by implemented features.
+The system needs authorised access for user-specific operations such as reading liked videos, subscriptions, playlists, and creating playlists. The project statement makes this explicit: use Google OAuth 2.0, request the minimum necessary scopes, store tokens securely, and handle re-authorisation gracefully when the OAuth consent screen is in Testing mode.
 
-The project brief highlights that refresh tokens issued while the OAuth consent screen is in **Testing** mode expire after seven days for the relevant external-user configuration. Design for re-authorisation rather than assuming refresh always works. Verify current Google documentation and consent-screen settings before deployment because behavior depends on app type, publishing status, scopes, and account configuration.
+This is a high-risk area because failures here are not merely UX issues. An expired refresh token or missing scope can block FR-3, FR-4, and FR-5 entirely, and a missing YouTube channel can prevent playlist creation even when OAuth succeeds.
 
 See [[mcp-protocol-architecture]], [[youtube-api-quotas]], and [[prompt-injection-defense]].
 
-## Access token and refresh token
+## Token model
 
 - **Access token:** short-lived credential sent to Google APIs.
-- **Refresh token:** used to obtain a new access token, subject to revocation, expiry, policy, and consent-screen constraints.
-- **Client secret:** OAuth application credential; not a user token and never committed.
+- **Refresh token:** long-lived credential used to mint new access tokens; may expire or be revoked.
+- **Client secret:** OAuth application credential; never committed to the repository.
 
-Never put tokens in logs, fixtures, screenshots, AI prompts, or source control.
+Never place tokens in logs, screenshots, AI prompts, fixtures, or source control. The project brief explicitly requires no secrets in the repo and no real user data or personal credentials in test assets.
 
 ## Lifecycle
 
@@ -31,23 +31,30 @@ Authenticated
   -> access token expires
 Refresh attempt
   -> success: Authenticated
-  -> invalid_grant / revoked / expired: Reauthorization Required
+  -> invalid_grant / revoked / expired: Re-authorization Required
   -> user consents again: Authenticated
 ```
 
-Refresh failure is an expected state, not an unhandled stack trace. User-specific tools should fail closed and show a safe message explaining how to reconnect.
+Refresh failure is expected operational behavior, not an unhandled exception. User-specific tools should fail closed and present a safe message telling the user to reconnect their YouTube account.
 
-## Minimum scopes and local storage
+## Scope discipline and local storage
 
-Use read-only scopes for public metadata, account-data scopes for FR-3/FR-4, and playlist-management permission for FR-5. Do not request broad permissions “just in case.” Maintain a scope-to-feature table and verify granted scopes before enabling tools.
+Use the minimum scopes that match the implemented feature set:
+
+- read-only/public metadata for discovery and similarity scoring;
+- user library access for FR-3 and FR-4;
+- playlist write access only for FR-5.
+
+Do not request broad permissions “just in case.” The server should maintain a scope-to-feature table and verify the granted scopes before enabling any tool that depends on them.
 
 For local development:
-1. Keep OAuth client configuration outside the repository or in an ignored local path.
-2. Store token cache in a user-private directory with restrictive permissions.
-3. Ignore client-secret and token files.
-4. Never store tokens in fixtures or CI artifacts.
-5. Prefer an OS keychain where practical; document limitations of a local token file.
-6. Separate test credentials from personal development credentials.
+
+1. keep OAuth client configuration outside the repository or in a local ignored path;
+2. store token caches in a user-private directory with restrictive permissions;
+3. ignore client-secret and token files;
+4. never store tokens in fixtures or CI artifacts;
+5. prefer OS keychain or secure local storage when available;
+6. separate personal development credentials from test credentials.
 
 Example `.gitignore` entries:
 
@@ -61,22 +68,37 @@ token*.json
 credentials/
 ```
 
-On POSIX systems, a local token file can be restricted with `chmod 600`; Windows requires appropriate ACL handling. File permissions are only one layer of protection.
+On POSIX systems, a local token file can be restricted with `chmod 600`; on Windows, use appropriate ACL permissions. File permissions are not the whole protection story, but they are a necessary baseline.
 
-## Re-authorization behavior
+## Re-authorization and missing-channel handling
 
-- Detect refresh failures such as `invalid_grant`.
-- Avoid repeatedly retrying a known-invalid token.
-- Mark the account as requiring re-authorisation.
-- Explain the next step without revealing credentials.
-- After consent, verify granted scopes and account state.
-- Handle accounts without a YouTube channel: playlist creation cannot proceed and must return an actionable explanation.
+The project brief notes that refresh tokens issued while the OAuth consent screen is in Testing mode can expire after seven days for some external-user configurations. The application must therefore design for re-authorisation rather than assuming refresh always works.
 
-A successful token refresh does not guarantee the API call will succeed; missing scopes, inaccessible resources, quota exhaustion, and missing channel are distinct conditions.
+Operational rules:
 
-## Testing
+- detect refresh failures such as `invalid_grant`;
+- avoid retry loops against a known-invalid token;
+- mark the associated account as needing re-authorization;
+- explain the next step without revealing credentials;
+- verify granted scopes and account state after consent;
+- handle the missing-channel case explicitly: a Google account without a YouTube channel cannot create playlists.
 
-Use fake credentials and an injectable clock. Test absent token, successful refresh, seven-day test-mode expiry, revoked token, insufficient scopes, missing channel, safe storage, and absence of secrets from logs. CI must not need a real Google account. Live OAuth checks belong in a separately gated procedure.
+A successful token refresh still does not guarantee the API call will succeed. Missing scopes, inaccessible resources, quota exhaustion, and missing channel are distinct failure states and must be handled separately.
+
+## Testing requirements
+
+Use fake credentials and an injectable clock. At minimum, tests should cover:
+
+- absent token;
+- successful refresh;
+- seven-day test-mode expiry;
+- revoked token;
+- insufficient scopes;
+- missing channel;
+- secure storage and redaction behaviour;
+- absence of secrets from logs and fixtures.
+
+CI must not require a live Google account. Live OAuth checks belong in a separately gated procedure or scheduled workflow.
 
 ## Related notes
 

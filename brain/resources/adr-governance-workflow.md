@@ -8,7 +8,7 @@ status: research
 
 ## Purpose
 
-Architecture Decision Records (ADRs) capture significant decisions, why they were made, alternatives considered, and consequences accepted. They prevent important context from living only in chat history or one engineer's memory.
+Architecture Decision Records (ADRs) capture significant decisions, why they were made, alternatives considered, and consequences accepted. They prevent important context from living only in chat history or one engineer’s memory.
 
 The SDLC brief requires significant decisions under `docs/adr/`, each citing brain notes. It also requires traceability from requirement to issue, PR, test, skill, and brain note. See [[para-knowledge-management]], [[mcp-protocol-architecture]], and [[github-actions-ci-setup]].
 

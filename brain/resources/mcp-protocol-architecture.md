@@ -8,85 +8,83 @@ status: research
 
 ## Purpose
 
-The Model Context Protocol (MCP) standardises how an AI application discovers and invokes capabilities exposed by a server. Here, the MCP server is a controlled adapter between a conversational AI client and the official YouTube Data API v3. The client interprets user intent and chooses a tool; the server validates arguments, enforces policy, executes deterministic logic, and returns structured results.
+The project statement defines Vidora as an MCP server that lets a conversational AI client discover, analyse, and curate YouTube videos for an authorised user using the official YouTube Data API v3. The architecture is intentionally narrow: the AI client handles intent and presentation, while the MCP server is the policy boundary that validates arguments, enforces quota and OAuth rules, and performs only the operations the user has explicitly allowed.
 
-The project brief names Claude, ChatGPT, and Gemini as examples. Actual support depends on each product's current MCP integration and transport support; do not assume every client supports every transport. See [[youtube-api-quotas]], [[prompt-injection-defense]], and [[adr-governance-workflow]].
+This matters because the system is not just a search wrapper. It is a controlled automation layer for FR-1 to FR-5, with a strong requirement that playlist creation only happens after human confirmation and that write operations are tied to a specific proposal, not just vague user intent.
 
-## Logical architecture
+See [[youtube-api-quotas]], [[prompt-injection-defense]], [[oauth2-token-lifecycle]], and [[adr-governance-workflow]].
+
+## System view
 
 ```text
 User
   -> Conversational AI client
   -> MCP transport and protocol
   -> MCP server: Tools / Resources / Prompts
-  -> Application services
-       -> Similarity engine (TF-IDF + cosine)
+       -> Validation layer
+       -> Similarity scoring (TF-IDF + cosine)
        -> Playlist constraint planner
        -> Quota manager and cache
-       -> OAuth/token manager
-  -> YouTubeProvider interface
+       -> OAuth / token manager
+  -> Provider boundary
   -> Official YouTube Data API v3
 ```
 
-Keep protocol concerns out of domain logic. Tool handlers should validate input, call a use-case service, convert results to MCP content, and map expected failures to safe errors.
+The key rule is simple: protocol concerns stay separate from domain logic. Tool handlers validate the input, call an application service, convert the response to MCP content, and translate failures into safe, user-facing errors. They should not silently recover from quota rejection, expired OAuth, malformed IDs, or confirmation bypass.
 
-## Transports
+## Transport choices
 
 ### stdio
 
-A local client launches the server as a subprocess. MCP messages use standard input/output; diagnostics belong on standard error. This is a useful local default because it avoids opening a listening port.
+This is the default local transport. A client starts the server as a subprocess and speaks JSON-RPC over standard input/output. Standard error is reserved for diagnostics; stdout should stay clean and machine-readable.
 
-- Never print banners or debug text to stdout.
-- Keep credentials in environment variables or protected local configuration.
-- Treat inherited environment variables as potentially sensitive.
-- Do not commit real secrets or token files.
+Requirements for this project:
 
-Illustrative configuration (adapt to the chosen client's current schema):
-
-```json
-{
-  "mcpServers": {
-    "youtube-video-intelligence": {
-      "command": "python",
-      "args": ["-m", "youtube_mcp.server"],
-      "env": {
-        "YOUTUBE_CLIENT_SECRETS_FILE": "/secure/path/client_secret.json"
-      }
-    }
-  }
-}
-```
+- never print banners or debug logs to stdout;
+- keep secrets in environment variables or a protected local config;
+- treat inherited environment variables as sensitive;
+- never commit real credentials, token files, or client secrets.
 
 ### HTTP
 
-HTTP transport may suit separated or deployed clients. It adds authentication, TLS, origin policy, request limits, session management where applicable, and network-exposure concerns. Bind to loopback for local-only development unless remote access is an explicit requirement. Record transport choice in an ADR; see [[adr-governance-workflow]].
+HTTP is optional for remote or hosted deployments, but it adds more operational concerns: authentication, TLS, CORS/origin controls, session handling, request limits, and network exposure. Bind to loopback unless there is an explicit requirement for remote access. Record the transport decision in an ADR.
 
-## Tools, Resources, and Prompts
+## Tools, resources, and prompts
 
 ### Tools
 
-Tools are callable operations with validated inputs. Suggested tools:
+The product needs tools that are explicit and narrow. Good examples include:
 
 | Tool | Purpose | Side effect |
 |---|---|---|
 | `find_similar_videos` | Rank videos using metadata | Read-only |
 | `find_similar_channels` | Rank channels using metadata | Read-only |
-| `analyse_my_library` | Aggregate authorised likes, subscriptions, and playlists | Read-only |
-| `propose_playlist` | Build candidate playlist under FR-5 | None |
-| `create_confirmed_playlist` | Create after explicit approval | Write |
-| `get_quota_status` | Report quota ledger state | Read-only |
+| `recommend_videos_for_user` | Analyse authorised likes, subscriptions, and playlists | Read-only |
+| `propose_playlist` | Build a candidate playlist under FR-5 | None |
+| `create_confirmed_playlist` | Execute a playlist write after explicit approval | Write |
+| `get_quota_status` | Return remaining budget and recent ledger state | Read-only |
 
-Bind confirmation to a specific proposal ID, account, title, and item list. A vague confirmation string is not a sufficient safeguard.
+Important: confirmation must be bound to a concrete proposal ID, a specific user account, and the exact playlist payload. A free-form confirmation such as “yes” is not enough.
 
 ### Resources
 
-Resources expose readable context such as project policy, quota status, cached metadata, or generated analysis reports. Define identifiers and access rules. Do not expose OAuth tokens, raw personal-library exports, or unbounded datasets.
+Resources should expose only read-only or policy-safe context: quota status, cached metadata, approved proposal state, or generated reports. They must not expose raw OAuth tokens, user-library exports, or unbounded datasets. The project brief explicitly forbids shipping real user data in fixtures or logs.
 
 ### Prompts
 
-A prompt can package the `video-to-playlist` workflow: summarise a seed video, find similar videos, propose a playlist, request confirmation, create it, and report analysis. A prompt is guidance, not an authorisation boundary. Server-side checks remain mandatory.
+A prompt can package the `video-to-playlist` workflow:
+
+1. summarise the seed video;
+2. find similar videos (FR-1);
+3. propose a playlist and ask for confirmation;
+4. create the playlist only after approval (FR-5);
+5. report a brief analysis of the result.
+
+A prompt is guidance, not an authorisation boundary. The server still enforces validation, OAuth, quota, and confirmation checks.
 
 ## Provider boundary
+
+The provider boundary isolates the YouTube API and keeps the rest of the system independent from external schema drift.
 
 ```python
 from typing import Protocol, Sequence
@@ -97,25 +95,36 @@ class YouTubeProvider(Protocol):
     def get_channels(self, channel_ids: Sequence[str]) -> Sequence[dict]: ...
 ```
 
-The production implementation wraps the official client library. A fixture implementation returns deterministic JSON. Convert external responses to internal DTOs so provider schema changes do not leak through the application.
+Production implementations wrap the official client library. Fixture-backed implementations return deterministic JSON, so unit and CI tests remain reproducible. Internal DTO conversion keeps external API churn from leaking into business logic.
 
-## Errors and testing
+## Error handling and testing
 
-Expected error classes include invalid arguments, unavailable resources, pre-flight quota rejection, OAuth re-authorisation required, missing YouTube channel, and transient provider failure. Avoid raw stack traces and provider response bodies in client-facing errors.
+Expected failure modes include invalid arguments, unavailable resources, quota rejection, OAuth re-authorization required, missing YouTube channel, malformed metadata, and transient provider errors. Return user-safe messages without dumping raw stack traces or provider payloads.
 
-Test service logic, MCP tool discovery/invocation, fixture-backed provider contracts, and end-to-end FR-1 to FR-5. Keep live tests isolated. Include tests for hostile metadata, OAuth expiry, malformed IDs, and confirmation bypass.
+Testing must cover:
+
+- tool discovery and invocation through MCP;
+- provider contract behaviour with fixtures;
+- end-to-end verification of FR-1 through FR-5;
+- hostile metadata and prompt injection;
+- OAuth expiry and missing-channel cases;
+- quotaExceeded before any live API call;
+- confirmation bypass attempts.
+
+The project statement also requires that live API tests remain separate from CI and use a fixed quota budget. CI should operate on mocks or recorded fixtures only.
 
 ## Design principles
 
-1. Least privilege: minimum OAuth scopes.
-2. Separation of transport, use cases, provider, and storage.
-3. Explicit and auditable side effects.
-4. Deterministic tests.
-5. Traceability from requirements to tools, tests, skills, ADRs, and notes.
+1. least privilege for OAuth scopes;
+2. separation of transport, use cases, provider, and storage;
+3. explicit and auditable side effects;
+4. deterministic, fixture-driven testing;
+5. traceability from requirements to tools, tests, skills, ADRs, and notes.
 
 ## Related notes
 
 - [[youtube-api-quotas]]
 - [[sqlite-fixture-caching]]
 - [[prompt-injection-defense]]
+- [[oauth2-token-lifecycle]]
 - [[adr-governance-workflow]]
